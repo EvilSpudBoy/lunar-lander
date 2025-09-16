@@ -1,10 +1,11 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-- `index.html` — Canvas element, HUD, and controls overlay.
-- `styles.css` — Minimal styling for the canvas, HUD, and overlays.
-- `script.js` — All game logic: terrain generation (`makeTerrain`), lander model (`makeLander`), input handling, physics, rendering, and the main loop (`frame`).
-- No build system or external assets; this is a static web app.
+- `docs/` — Deployable site for GitHub Pages.
+  - `index.html` — Canvas element, HUD, and controls overlay.
+  - `styles.css` — Styling for the canvas, HUD, and overlays.
+  - `script.js` — Game logic: terrain (`makeTerrain`), lander (`makeLander`), input, physics, rendering, main loop (`frame`).
+- Root can host repo docs (e.g., `README.md`, CI files). No build system or external assets.
 
 ## Build, Test, and Development Commands
 - Run locally with a static server (examples):

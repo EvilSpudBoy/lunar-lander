@@ -7,6 +7,7 @@
   const overlay = document.getElementById('overlay');
   const btnPause = document.getElementById('btn-pause');
   const btnRestart = document.getElementById('btn-restart');
+  const btnAuto = document.getElementById('btn-auto');
   const HUD = {
     fuel: document.getElementById('fuel'),
     speed: document.getElementById('speed'),
@@ -15,6 +16,7 @@
     angle: document.getElementById('angle'),
   };
   const levelSelect = document.getElementById('level');
+  const autopilot = { enabled: false };
 
   // Game constants
   const WORLD = {
@@ -74,6 +76,12 @@
   const lerp = (a, b, t) => a + (b - a) * t;
   const radToDeg = r => (r * 180) / Math.PI;
   const fmt = n => Math.round(n);
+  const angleDiff = (a, b) => {
+    let d = a - b;
+    while (d > Math.PI) d -= Math.PI * 2;
+    while (d < -Math.PI) d += Math.PI * 2;
+    return d;
+  };
 
   // Terrain generation
   function makeTerrain(width, height, opts = {}) {
@@ -423,6 +431,8 @@
 
     // Update
     if (gameState === 'playing') {
+      // If autopilot is enabled, compute controls each frame
+      if (autopilot.enabled) applyAutopilot(dt);
       lander.update(dt);
       handleCollision();
     }
@@ -447,6 +457,7 @@
     const isInteractive = tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' || (t && t.isContentEditable);
     if (isInteractive) return;
     if (e.repeat) return;
+    if (e.code === 'KeyQ') { toggleAutopilot(); return; }
     if (e.code === 'ArrowLeft' || e.code === 'KeyA') input.left = true;
     if (e.code === 'ArrowRight' || e.code === 'KeyD') input.right = true;
     if (e.code === 'ArrowUp' || e.code === 'KeyW') input.thrust = true;
@@ -467,12 +478,15 @@
 
   btnPause.addEventListener('click', togglePause);
   btnRestart.addEventListener('click', () => resetGame(false));
+  if (btnAuto) btnAuto.addEventListener('click', toggleAutopilot);
 
   // Level selection
   if (levelSelect) {
     levelSelect.addEventListener('change', () => {
       currentDifficulty = levelSelect.value;
       clearInput();
+      autopilot.enabled = false;
+      updateAutopilotUI();
       resetGame(true);
     });
   }
@@ -491,11 +505,62 @@
     }
   }
 
+  function toggleAutopilot() {
+    autopilot.enabled = !autopilot.enabled;
+    clearInput();
+    updateAutopilotUI();
+  }
+
+  function updateAutopilotUI() {
+    if (btnAuto) btnAuto.textContent = `Autopilot: ${autopilot.enabled ? 'On' : 'Off'}`;
+  }
+
+  // Simple heuristic autopilot: tilt toward pad center and manage descent rate
+  function applyAutopilot(dt) {
+    if (!terrain || !lander || lander.fuel <= 0) return; // if no fuel, leave controls off
+    const padCenter = (terrain.pad.x1 + terrain.pad.x2) * 0.5;
+    const padHalf = Math.max(8, (terrain.pad.x2 - terrain.pad.x1) * 0.5);
+    const ex = padCenter - lander.x; // + means pad is to the right
+    const vx = lander.vx;
+    const vy = lander.vy;
+    const alt = Math.max(0, terrain.yAt(lander.x) - (lander.y + lander.radius));
+
+    // Desired tilt (radians), PD on horizontal position/velocity
+    const MAX_TILT = 0.6; // ~34°
+    const KpX = 0.0012;   // rad per px
+    const KdV = 0.0045;   // rad per (px/s)
+    let desiredTilt = clamp(KpX * ex + KdV * (-vx), -MAX_TILT, MAX_TILT);
+
+    // Reduce tilt as we get close to the pad and near the ground
+    if (Math.abs(ex) < padHalf * 0.7) desiredTilt *= 0.5;
+    if (alt < 60) desiredTilt = clamp(desiredTilt, -0.25, 0.25);
+    if (alt < 18) desiredTilt = 0; // final flare
+
+    // Rotate towards desired tilt
+    const angErr = angleDiff(desiredTilt, lander.angle);
+    input.left = false; input.right = false; // autopilot overrides manual
+    const ANG_EPS = 0.02;
+    if (angErr > ANG_EPS) input.right = true; // need to increase angle
+    else if (angErr < -ANG_EPS) input.left = true; // need to decrease angle
+
+    // Vertical speed target: faster high, slower low
+    const vMaxFar = 36;
+    const vMaxNear = 22;
+    let vDes = 12 + 0.10 * alt; // px/s downward
+    vDes = Math.min(vDes, Math.abs(ex) < padHalf * 0.7 ? vMaxNear : vMaxFar);
+    if (alt < 60) vDes = Math.min(vDes, 18);
+    if (alt < 20) vDes = Math.min(vDes, 12);
+
+    // Thrust control: bang-bang on vertical speed error
+    input.thrust = vy > vDes; // if descending too fast, burn
+  }
+
   // Init
   function init() {
     resetGame(true);
     lastTime = performance.now();
     requestAnimationFrame(frame);
+    updateAutopilotUI();
   }
 
   init();

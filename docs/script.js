@@ -24,19 +24,34 @@
     height: canvas.height,
   };
 
-  const GRAVITY = 22; // px/s^2
-  const MAIN_THRUST = 42; // px/s^2
-  const ROT_ACC = 2.6; // rad/s^2
+  // Base physics constants
+  const BASE = {
+    GRAVITY: 22,      // px/s^2
+    MAIN_THRUST: 42,  // px/s^2
+    ROT_ACC: 2.6,     // rad/s^2
+    FUEL_MAIN_PER_S: 26,
+    FUEL_ROT_PER_S: 6,
+    SAFE: { vX: 32, vY: 42, angle: 0.2 },
+  };
+  // Active (difficulty-scaled) physics; updated on reset/level change
+  const PHYS = {
+    gravity: BASE.GRAVITY,
+    mainThrust: BASE.MAIN_THRUST,
+    rotAcc: BASE.ROT_ACC,
+    fuelMainPerS: BASE.FUEL_MAIN_PER_S,
+    fuelRotPerS: BASE.FUEL_ROT_PER_S,
+    safe: { ...BASE.SAFE },
+  };
   const ANGULAR_DAMP = 0.995; // friction-like damping
   const AIR_DAMP = 0.0005; // small air resistance
 
-  const FUEL_MAIN_PER_S = 26; // units/s when main thruster on
-  const FUEL_ROT_PER_S = 6; // units/s when rotating
-
-  const SAFE_LIMITS = {
-    vX: 32, // px/s
-    vY: 42, // px/s
-    angle: 0.2, // rad (~11.5°)
+  // Autopilot tuning (varies by difficulty)
+  const AUTOCFG = {
+    glideAlt: 140,
+    baseMargin: 22,    // px safety margin for suicide burn computation
+    marginVelK: 0.3,   // additional margin proportional to current vy
+    vFinalNear: 6,     // target vy close to ground
+    vFinal: 10,        // target vy otherwise
   };
 
   // Difficulty presets
@@ -46,18 +61,27 @@
       fuel: 300,
       padSegments: 6, // wider pad
       padCenter: 'center', // directly below initial lander (screen center)
+      physics: { gravityScale: 0.9, thrustScale: 1.15, rotScale: 1.2, fuelMainScale: 0.9, fuelRotScale: 0.9,
+        safe: { vX: 44, vY: 54, angle: 0.32 } },
+      auto: { glideAlt: 160, baseMargin: 20, marginVelK: 0.25, vFinalNear: 5, vFinal: 8 },
     },
     normal: {
       name: 'Normal',
       fuel: 100,
       padSegments: 4, // medium pad
       padRangeFrac: [0.3, 0.7], // roughly middle third
+      physics: { gravityScale: 1.0, thrustScale: 1.05, rotScale: 1.1, fuelMainScale: 1.0, fuelRotScale: 1.0,
+        safe: { vX: 38, vY: 48, angle: 0.25 } },
+      auto: { glideAlt: 150, baseMargin: 26, marginVelK: 0.32, vFinalNear: 6, vFinal: 10 },
     },
     hard: {
       name: 'Hard',
       fuel: 60,
       padSegments: 2, // smaller pad
       padRangeFrac: [0.1, 0.9], // anywhere across most of the map
+      physics: { gravityScale: 1.05, thrustScale: 0.98, rotScale: 1.0, fuelMainScale: 1.0, fuelRotScale: 1.0,
+        safe: { vX: 28, vY: 38, angle: 0.18 } },
+      auto: { glideAlt: 140, baseMargin: 30, marginVelK: 0.38, vFinalNear: 7, vFinal: 12 },
     },
   };
   let currentDifficulty = 'normal';
@@ -222,21 +246,21 @@
 
         // Controls and fuel usage
         let ax = 0;
-        let ay = GRAVITY;
+        let ay = PHYS.gravity;
 
         const usingThrust = input.thrust && this.fuel > 0;
         if (usingThrust) {
           const tx = Math.sin(this.angle);
           const ty = -Math.cos(this.angle);
-          ax += MAIN_THRUST * tx;
-          ay += MAIN_THRUST * ty;
-          this.fuel = Math.max(0, this.fuel - FUEL_MAIN_PER_S * dt);
+          ax += PHYS.mainThrust * tx;
+          ay += PHYS.mainThrust * ty;
+          this.fuel = Math.max(0, this.fuel - PHYS.fuelMainPerS * dt);
         }
 
         const rotating = (input.left || input.right) && this.fuel > 0;
-        if (rotating) this.fuel = Math.max(0, this.fuel - FUEL_ROT_PER_S * dt);
-        if (input.left && this.fuel > 0) this.omega -= ROT_ACC * dt;
-        if (input.right && this.fuel > 0) this.omega += ROT_ACC * dt;
+        if (rotating) this.fuel = Math.max(0, this.fuel - PHYS.fuelRotPerS * dt);
+        if (input.left && this.fuel > 0) this.omega -= PHYS.rotAcc * dt;
+        if (input.right && this.fuel > 0) this.omega += PHYS.rotAcc * dt;
 
         // Integrate
         this.vx += ax * dt;
@@ -340,10 +364,33 @@
   }
 
   // Game management
+  function applyDifficultyConfig(cfg) {
+    const p = (cfg && cfg.physics) || {};
+    // Physics scaling
+    PHYS.gravity = BASE.GRAVITY * (p.gravityScale ?? 1);
+    PHYS.mainThrust = BASE.MAIN_THRUST * (p.thrustScale ?? 1);
+    PHYS.rotAcc = BASE.ROT_ACC * (p.rotScale ?? 1);
+    PHYS.fuelMainPerS = BASE.FUEL_MAIN_PER_S * (p.fuelMainScale ?? 1);
+    PHYS.fuelRotPerS = BASE.FUEL_ROT_PER_S * (p.fuelRotScale ?? 1);
+    // Safety limits
+    const safe = p.safe || {};
+    PHYS.safe.vX = safe.vX ?? BASE.SAFE.vX;
+    PHYS.safe.vY = safe.vY ?? BASE.SAFE.vY;
+    PHYS.safe.angle = safe.angle ?? BASE.SAFE.angle;
+    // Autopilot tuning
+    const a = (cfg && cfg.auto) || {};
+    AUTOCFG.glideAlt = a.glideAlt ?? AUTOCFG.glideAlt;
+    AUTOCFG.baseMargin = a.baseMargin ?? AUTOCFG.baseMargin;
+    AUTOCFG.marginVelK = a.marginVelK ?? AUTOCFG.marginVelK;
+    AUTOCFG.vFinalNear = a.vFinalNear ?? AUTOCFG.vFinalNear;
+    AUTOCFG.vFinal = a.vFinal ?? AUTOCFG.vFinal;
+  }
+
   function resetGame(randomizeTerrain = true) {
     // Ensure no controls are latched across resets
     clearInput();
     const cfg = DIFFICULTIES[currentDifficulty] || DIFFICULTIES.normal;
+    applyDifficultyConfig(cfg);
     if (randomizeTerrain || !terrain) {
       let terrainOpts = { padSegments: cfg.padSegments };
       if (cfg.padCenter === 'center') {
@@ -383,9 +430,9 @@
       lander.y = groundY - lander.radius;
 
       const onPad = lander.x >= terrain.pad.x1 && lander.x <= terrain.pad.x2;
-      const safeAngle = Math.abs(lander.angle) <= SAFE_LIMITS.angle;
-      const safeVX = Math.abs(lander.vx) <= SAFE_LIMITS.vX;
-      const safeVY = Math.abs(lander.vy) <= SAFE_LIMITS.vY;
+      const safeAngle = Math.abs(lander.angle) <= PHYS.safe.angle;
+      const safeVX = Math.abs(lander.vx) <= PHYS.safe.vX;
+      const safeVY = Math.abs(lander.vy) <= PHYS.safe.vY;
 
       if (onPad && safeAngle && safeVX && safeVY) {
         lander.vx = 0; lander.vy = 0; lander.omega = 0;
@@ -417,10 +464,10 @@
     HUD.angle.textContent = `Angle: ${fmt(radToDeg(lander.angle))}°`;
 
     // Color hints for safety
-    HUD.speed.style.color = speed <= Math.hypot(SAFE_LIMITS.vX, SAFE_LIMITS.vY) ? 'var(--good)' : 'var(--bad)';
-    HUD.horiz.style.color = Math.abs(vx) <= SAFE_LIMITS.vX ? 'var(--good)' : 'var(--bad)';
+    HUD.speed.style.color = speed <= Math.hypot(PHYS.safe.vX, PHYS.safe.vY) ? 'var(--good)' : 'var(--bad)';
+    HUD.horiz.style.color = Math.abs(vx) <= PHYS.safe.vX ? 'var(--good)' : 'var(--bad)';
     HUD.alt.style.color = alt < 60 ? 'var(--warn)' : 'var(--muted)';
-    HUD.angle.style.color = Math.abs(lander.angle) <= SAFE_LIMITS.angle ? 'var(--good)' : 'var(--bad)';
+    HUD.angle.style.color = Math.abs(lander.angle) <= PHYS.safe.angle ? 'var(--good)' : 'var(--bad)';
   }
 
   // Main loop
@@ -531,7 +578,7 @@
     const KdV = 0.0045;   // rad per (px/s)
     let desiredTilt = clamp(KpX * ex + KdV * (-vx), -MAX_TILT, MAX_TILT);
     // Glide: fade tilt as we descend to preserve vertical thrust
-    const GLIDE_ALT = 120;
+    const GLIDE_ALT = AUTOCFG.glideAlt;
     const tiltScale = clamp(alt / GLIDE_ALT, 0, 1);
     desiredTilt *= tiltScale;
     if (Math.abs(ex) < padHalf * 0.7) desiredTilt *= 0.6;
@@ -547,14 +594,14 @@
 
     // Fuel-aware vertical control using stopping distance (suicide burn heuristic)
     const cosA = Math.cos(lander.angle);
-    const a_on = GRAVITY - MAIN_THRUST * Math.max(0, cosA); // vertical acceleration when thrusting
-    const vFinal = alt < 18 ? 6 : 10; // desired touchdown descent speed
+    const a_on = PHYS.gravity - PHYS.mainThrust * Math.max(0, cosA); // vertical acceleration when thrusting
+    const vFinal = alt < 18 ? AUTOCFG.vFinalNear : AUTOCFG.vFinal; // desired descent speed
 
     let needBurn = false;
     if (a_on < 0 && vy > vFinal) {
       // stopping distance to go from vy to vFinal under a_on
       const s_stop = (vFinal * vFinal - vy * vy) / (2 * a_on); // a_on negative => positive distance
-      const margin = 12 + 0.2 * vy; // safety buffer grows with speed
+      const margin = AUTOCFG.baseMargin + AUTOCFG.marginVelK * vy; // safety buffer grows with speed
       needBurn = s_stop + margin >= alt;
     }
 

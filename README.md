@@ -15,11 +15,16 @@ Once GitHub Pages is enabled (Settings → Pages → Deploy from branch → `mai
 - Level selector (top bar): Easy, Normal, Hard
 
 ## Run Locally
+Option 0 (no server):
+- Open `docs/index.html` directly in your browser.
+
 Option 1 (serve repo root, open `/docs`):
 - `python3 -m http.server 8000` then open `http://localhost:8000/docs/`
 
 Option 2 (serve only the site folder):
 - `cd docs && python3 -m http.server 8000` then open `http://localhost:8000/`
+
+Note: A server isn’t required for this project, but using one can help with consistent paths and testing in devtools.
 
 ## Features
 - Time-based physics with rotation/thrust, fuel consumption, and soft damping

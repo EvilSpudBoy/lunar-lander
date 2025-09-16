@@ -10,6 +10,7 @@ Once GitHub Pages is enabled (Settings → Pages → Deploy from branch → `mai
 ## Controls
 - Arrow Left/Right (or A/D): rotate
 - Arrow Up (or W): thrust
+- Q: toggle Autopilot
 - P: pause/resume
 - R: restart
 - Level selector (top bar): Easy, Normal, Hard

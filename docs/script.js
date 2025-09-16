@@ -16,7 +16,7 @@
     angle: document.getElementById('angle'),
   };
   const levelSelect = document.getElementById('level');
-  const autopilot = { enabled: false };
+  const autopilot = { enabled: false, burning: false };
 
   // Game constants
   const WORLD = {
@@ -530,11 +530,13 @@
     const KpX = 0.0012;   // rad per px
     const KdV = 0.0045;   // rad per (px/s)
     let desiredTilt = clamp(KpX * ex + KdV * (-vx), -MAX_TILT, MAX_TILT);
-
-    // Reduce tilt as we get close to the pad and near the ground
-    if (Math.abs(ex) < padHalf * 0.7) desiredTilt *= 0.5;
-    if (alt < 60) desiredTilt = clamp(desiredTilt, -0.25, 0.25);
-    if (alt < 18) desiredTilt = 0; // final flare
+    // Glide: fade tilt as we descend to preserve vertical thrust
+    const GLIDE_ALT = 120;
+    const tiltScale = clamp(alt / GLIDE_ALT, 0, 1);
+    desiredTilt *= tiltScale;
+    if (Math.abs(ex) < padHalf * 0.7) desiredTilt *= 0.6;
+    if (alt < 60) desiredTilt = clamp(desiredTilt, -0.22, 0.22);
+    if (alt < 22) desiredTilt = 0; // final flare to maximize vertical thrust
 
     // Rotate towards desired tilt
     const angErr = angleDiff(desiredTilt, lander.angle);
@@ -543,16 +545,36 @@
     if (angErr > ANG_EPS) input.right = true; // need to increase angle
     else if (angErr < -ANG_EPS) input.left = true; // need to decrease angle
 
-    // Vertical speed target: faster high, slower low
-    const vMaxFar = 36;
-    const vMaxNear = 22;
-    let vDes = 12 + 0.10 * alt; // px/s downward
-    vDes = Math.min(vDes, Math.abs(ex) < padHalf * 0.7 ? vMaxNear : vMaxFar);
-    if (alt < 60) vDes = Math.min(vDes, 18);
-    if (alt < 20) vDes = Math.min(vDes, 12);
+    // Fuel-aware vertical control using stopping distance (suicide burn heuristic)
+    const cosA = Math.cos(lander.angle);
+    const a_on = GRAVITY - MAIN_THRUST * Math.max(0, cosA); // vertical acceleration when thrusting
+    const vFinal = alt < 18 ? 6 : 10; // desired touchdown descent speed
 
-    // Thrust control: bang-bang on vertical speed error
-    input.thrust = vy > vDes; // if descending too fast, burn
+    let needBurn = false;
+    if (a_on < 0 && vy > vFinal) {
+      // stopping distance to go from vy to vFinal under a_on
+      const s_stop = (vFinal * vFinal - vy * vy) / (2 * a_on); // a_on negative => positive distance
+      const margin = 12 + 0.2 * vy; // safety buffer grows with speed
+      needBurn = s_stop + margin >= alt;
+    }
+
+    // If we are significantly tilted, prefer to align before burning unless it's urgent
+    const tooTilted = Math.abs(lander.angle) > 0.35 && alt > 30;
+    if (tooTilted && needBurn && a_on >= -2) {
+      // Not enough vertical decel when tilted; wait a moment to level to save fuel
+      needBurn = false;
+    }
+
+    // Maintain some hysteresis once burning to avoid rapid toggling
+    if (autopilot.burning) {
+      // Keep burning until we're under target or nearly down
+      if (vy <= vFinal + 1 || alt < 8) autopilot.burning = false;
+    } else {
+      // Start burn if needed now, or if close to ground and too fast
+      if (needBurn || (alt < 28 && vy > vFinal)) autopilot.burning = true;
+    }
+
+    input.thrust = autopilot.burning;
   }
 
   // Init
